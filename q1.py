@@ -17,7 +17,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import matplotlib.pyplot as plt
 import random
-
+from scipy.spatial import Delaunay
 
 
 class ExampleContent(QWidget):
@@ -56,7 +56,6 @@ class ExampleContent(QWidget):
         self.setGeometry(0, 0, 0,0)
         self.InputImage(fileName1)
         self.TargetImage(fileName2)
-        self.labTarget.mousePressEvent = self.GetCoord
     
     def TargetImage(self,fN):    
         
@@ -66,8 +65,6 @@ class ExampleContent(QWidget):
         
         self.vBox2.addWidget(self.labTarget)
         
-    def GetCoord(self,event):
-        print(event.pos())
         
         
     def InputImage(self,fN):
@@ -75,10 +72,8 @@ class ExampleContent(QWidget):
         self.qpInput = QPixmap(fN)
         self.labInput.setPixmap(self.qpInput)
         self.labInput.move(50,50)
-        self.qpInput
         self.vBox1.addWidget(self.labInput)
-        print(self.labInput.x())
-        print(self.labInput.pos())
+
 
     def ResultImage(self,fN,val):
         print('smth')
@@ -89,12 +84,12 @@ class Window(QMainWindow):
         super().__init__()
         
         self.title = "Histogram Matching"
-        self.top = 50
-        self.left = 50
-        self.width = 1800
-        self.height = 1200
+        self.top = 1000
+        self.left = 200
+        self.width = 500
+        self.height = 500
         self.inputImage = None
-        self.TargetImage = None
+        self.targetImage = None
         self.result = None
         self.inputFile = ''
         self.targetFile= ''
@@ -104,7 +99,10 @@ class Window(QMainWindow):
         self.initWindow()
         self.inputPoints= np.zeros((20,2) ,dtype = 'int32')
         self.targetPoints= np.zeros((20,2) ,dtype = 'int32')
-
+        self.inputTrianglePoints = []
+        self.targetTrianglePoints = []
+        self.inputTriangle = np.zeros((6,6) ,dtype = 'int32')
+        self.targetTriangle =  np.zeros((6,6) ,dtype = 'int32')
         
     def initWindow(self):
          
@@ -175,6 +173,8 @@ class Window(QMainWindow):
         cv2.destroyAllWindows()
     def importInput(self):
         fileName = QFileDialog.getOpenFileName(self, "QFileDialog.getOpenFileName()", "", "All Files (*);;Png Files (*.png)")
+        if( fileName == ''):
+            return
         self.inputFile = fileName[0]
         self.inputImage = cv2.imread(fileName[0])
         self.inputImage = cv2.cvtColor(self.inputImage,cv2.COLOR_BGR2RGB)
@@ -199,6 +199,8 @@ class Window(QMainWindow):
 
     def importTarget(self):
         fileName = QFileDialog.getOpenFileName(self, "QFileDialog.getOpenFileName()", "", "All Files (*);;Png Files (*.png)")
+        if( fileName == ''):
+            return
         self.targetFile = fileName[0]
         self.targetImage = cv2.imread(fileName[0])
         self.targetImage = cv2.cvtColor(self.targetImage,cv2.COLOR_BGR2RGB)
@@ -208,7 +210,7 @@ class Window(QMainWindow):
         try:    
             self.fP = open((self.targetFile[:-3] + 'txt'), 'r')
       
-            for i in range(0,self.pointCount-1):
+            for i in range(0,self.pointCount):
                 
                 str_point = self.fP.readline()
                 self.targetPoints[i,0] = str_point.split('\t')[0]
@@ -220,14 +222,140 @@ class Window(QMainWindow):
             self.getImageCoordinates(self.targetFile)
             self.fP.close()
         
-        print(self.targetPoints)
-        print(self.inputPoints)
+     
     def createResultImage(self):
-        print('smth')
+        print('Result')
     def createMorph(self):
         print('morphing phase')
-    def createTriangulation():
-        print('triangulation')
+    def draw_point(self,img, p, color ) :
+        cv2.circle( img, p, 2, color, cv2.FILLED, cv2.LINE_AA, 0 )
+    def rect_contains(self,rect, point) :
+        if point[0] < rect[0] :
+            return False
+        elif point[1] < rect[1] :
+            return False
+        elif point[0] > rect[2] :
+            return False
+        elif point[1] > rect[3] :
+            return False
+        return True
+    
+    
+    def draw_voronoi(self,img, subdiv):
+ 
+        ( facets, centers) = subdiv.getVoronoiFacetList([])
+     
+        for i in range(0,len(facets)) :
+            ifacet_arr = []
+            for f in facets[i] :
+                ifacet_arr.append(f)
+             
+            ifacet = np.array(ifacet_arr, np.int)
+            print(ifacet)
+            color = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
+     
+            cv2.fillConvexPoly(img, ifacet, color, cv2.LINE_AA, 0);
+            ifacets = np.array([ifacet])
+            cv2.polylines(img, ifacets, True, (0, 0, 0), 1, cv2.LINE_AA, 0)
+            cv2.circle(img, (centers[i][0], centers[i][1]), 3, (0, 0, 0), cv2.FILLED, cv2.LINE_AA, 0)
+     
+    
+    def draw_delaunay(self,img, subdiv, delaunay_color,tr_list):
+     
+        triangleList = subdiv.getTriangleList();
+        
+        #print(triangleList)
+        size = img.shape
+        r = (0, 0, size[1], size[0])
+
+        for t in triangleList :
+             
+            pt1 = (t[0], t[1])
+            pt2 = (t[2], t[3])
+            pt3 = (t[4], t[5])
+             
+            
+            if self.rect_contains(r, pt1) and self.rect_contains(r, pt2) and self.rect_contains(r, pt3) :
+                cv2.line(img, pt1, pt2, delaunay_color, 1, cv2.LINE_AA, 0)
+                cv2.line(img, pt2, pt3, delaunay_color, 1, cv2.LINE_AA, 0)
+                cv2.line(img, pt3, pt1, delaunay_color, 1, cv2.LINE_AA, 0)
+
+        return triangleList                
+    def createTriangulation(self):
+        if(self.targetFile == '' or self.inputFile == ''):
+            return
+        self.inputImage = cv2.cvtColor(self.inputImage,cv2.COLOR_BGR2RGB)
+        self.targetImage = cv2.cvtColor(self.targetImage,cv2.COLOR_BGR2RGB)
+        
+        delaunay_color = (255,255,255)
+        
+        input_size = self.inputImage.shape
+        input_size_target = self.targetImage.shape
+        
+        rect = (0,0,input_size[1], input_size[0])
+        rect_target = (0,0,input_size_target[1], input_size_target[0])
+        
+        img_org = self.inputImage.copy()
+        img_org_target = self.targetImage.copy()
+        
+        subdiv = cv2.Subdiv2D(rect)
+        subdiv_target = cv2.Subdiv2D(rect_target)
+        points= []
+        points_target = []
+        
+        for i in range(0,self.pointCount):
+            points.append((self.inputPoints[i,0] , self.inputPoints[i,1]))
+            points_target.append((self.targetPoints[i,0] , self.targetPoints[i,1]))
+        
+        for p in points:
+            subdiv.insert(p)
+            img_copy = img_org.copy()
+            self.draw_delaunay(img_copy,subdiv,(255,255,255),self.inputTriangle)
+            cv2.imshow('deneme', img_copy)
+            cv2.waitKey(100)
+        
+        for p in points_target:
+            subdiv_target.insert(p)
+            img_copy_target = img_org_target.copy()
+            self.draw_delaunay(img_copy_target,subdiv_target,(255,255,255),self.targetTriangle)
+            cv2.imshow('deneme_target', img_copy_target)
+            cv2.waitKey(100)
+        
+        
+        
+        
+        tri_list_input = self.draw_delaunay(self.inputImage,subdiv,(255,255,255),self.inputTriangle)
+        tri_list_target = self.draw_delaunay(self.targetImage,subdiv_target,(255,255,255),self.targetTriangle)
+        
+        
+        print(tri_list_input)
+        
+        for p in points:
+            self.draw_point(self.inputImage,p,(0,0,255))
+        
+        for p in points_target:
+            self.draw_point(self.targetImage,p,(0,0,255))
+
+        
+        img_voronoi= np.zeros(self.inputImage.shape, dtype = self.inputImage.dtype)
+        
+        self.draw_voronoi(img_voronoi,subdiv)
+        
+        cv2.imshow('delauney', self.inputImage)
+        cv2.imshow('target', self.targetImage)
+    
+        
+        cv2.imwrite('delauneyInput.jpg',self.inputImage)
+        cv2.imwrite('delauneyTarget.jpg', self.targetImage)
+        
+        cv2.destroyAllWindows()
+        self.content = ExampleContent(self, 'delauneyInput.jpg','delauneyTarget.jpg')
+        self.setCentralWidget(self.content)
+        
+        
+        #tri = Delaunay(points)
+        #print(tri.simplices)
+        
     
     
 if __name__ == '__main__':
