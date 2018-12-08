@@ -21,17 +21,19 @@ from scipy.spatial import Delaunay
 
 
 class ExampleContent(QWidget):
-    def __init__(self, parent,fileName1,fileName2):
+    def __init__(self, parent,fileName1,fileName2,fileName3=''):
         self.parent = parent
         self.labInput= QLabel()
         self.labTarget= QLabel()
+        self.labResult= QLabel()
         self.qpTarget = None
         self.qpInput = None
+        self.qpResult = None
         QWidget.__init__(self, parent)
-        self.initUI(fileName1,fileName2)
+        self.initUI(fileName1,fileName2,fileName3)
         
         
-    def initUI(self,fileName1,fileName2):        
+    def initUI(self,fileName1,fileName2,fileName3= ''):        
 
         groupBox1 = QGroupBox('Input File')
         self.vBox1 = QVBoxLayout()
@@ -56,6 +58,8 @@ class ExampleContent(QWidget):
         self.setGeometry(0, 0, 0,0)
         self.InputImage(fileName1)
         self.TargetImage(fileName2)
+        if fileName3 != '':
+            self.ResultImage(fileName3)
     
     def TargetImage(self,fN):    
         
@@ -75,8 +79,11 @@ class ExampleContent(QWidget):
         self.vBox1.addWidget(self.labInput)
 
 
-    def ResultImage(self,fN,val):
-        print('smth')
+    def ResultImage(self,fN):
+        self.qpResult = QPixmap(fN)
+        self.labResult.setPixmap(self.qpResult)
+        
+        self.vBox3.addWidget(self.labResult)
         
         
 class Window(QMainWindow):
@@ -90,6 +97,8 @@ class Window(QMainWindow):
         self.height = 500
         self.inputImage = None
         self.targetImage = None
+        self.inputImageTemp = None
+        self.targetImageTemp = None
         self.result = None
         self.inputFile = ''
         self.targetFile= ''
@@ -99,11 +108,12 @@ class Window(QMainWindow):
         self.initWindow()
         self.inputPoints= np.zeros((20,2) ,dtype = 'int32')
         self.targetPoints= np.zeros((20,2) ,dtype = 'int32')
-        self.inputTrianglePoints = []
-        self.targetTrianglePoints = []
-        self.inputTriangle = np.zeros((6,6) ,dtype = 'int32')
-        self.targetTriangle =  np.zeros((6,6) ,dtype = 'int32')
-        
+        self.inputTrianglePoints = None
+        self.targetTrianglePoints = None
+        self.affine_parameters = None
+        self.inputTriangleMorph = None
+        self.targetTriangleMorph = None
+        self.triCount = 0 
     def initWindow(self):
          
         exitAct = QAction(QIcon('exit.png'), '&Exit' , self)
@@ -158,8 +168,20 @@ class Window(QMainWindow):
     def closeApp(self):
         sys.exit()
     
-
-        
+    def sortPoints(self,arr): # insertion sort for selected feature points
+        for i in range(1,(self.pointCount) -1 ):
+            key = arr[i,0]
+            little_key = arr[i,1]
+            j  = i - 1
+            
+            while(j>= 0 and (arr[j,0] < key or (arr[j,0] == key and (arr[j,1] <  little_key)))):
+                arr[j+1,0] = arr[j,0]
+                arr[j+1,1] = arr[j,1]
+                j -= 1
+            arr[j+1,0] = key
+            arr[j+1,1] = little_key
+                
+        return arr
     def getImageCoordinates(self,fN):
         self.selectedPoints = 0
         I = cv2.imread(fN)       
@@ -178,7 +200,8 @@ class Window(QMainWindow):
         self.inputFile = fileName[0]
         self.inputImage = cv2.imread(fileName[0])
         self.inputImage = cv2.cvtColor(self.inputImage,cv2.COLOR_BGR2RGB)
-        
+        self.inputImageTemp = cv2.imread(fileName[0])
+        self.inputImageTemp = cv2.cvtColor(self.inputImageTemp,cv2.COLOR_BGR2RGB)
         self.content = ExampleContent(self, self.inputFile,self.targetFile)
         self.setCentralWidget(self.content)
 
@@ -196,6 +219,14 @@ class Window(QMainWindow):
             self.fP = open((self.inputFile[:-3] + 'txt'), 'w')
             self.getImageCoordinates(self.inputFile)
             self.fP.close()
+            self.fP = open((self.inputFile[:-3] + 'txt'), 'r')
+            for i in range(0,self.pointCount):
+                str_points = self.fP.readline()
+                
+                self.inputPoints[i,0] = str_points.split('\t')[0]
+                self.inputPoints[i,1] = str_points.split('\t')[1]
+                
+            self.fP.close()
 
     def importTarget(self):
         fileName = QFileDialog.getOpenFileName(self, "QFileDialog.getOpenFileName()", "", "All Files (*);;Png Files (*.png)")
@@ -203,7 +234,10 @@ class Window(QMainWindow):
             return
         self.targetFile = fileName[0]
         self.targetImage = cv2.imread(fileName[0])
+        
         self.targetImage = cv2.cvtColor(self.targetImage,cv2.COLOR_BGR2RGB)
+        self.targetImageTemp = cv2.imread(fileName[0])
+        self.targetImageTemp = cv2.cvtColor(self.targetImageTemp,cv2.COLOR_BGR2RGB)
         self.content = ExampleContent(self, self.inputFile,self.targetFile)
         self.setCentralWidget(self.content)
         
@@ -221,12 +255,123 @@ class Window(QMainWindow):
             self.fP = open((self.targetFile[:-3] + 'txt'), 'w')
             self.getImageCoordinates(self.targetFile)
             self.fP.close()
+            self.fP = open((self.targetFile[:-3] + 'txt'), 'r')
+      
+            for i in range(0,self.pointCount):
+                
+                str_point = self.fP.readline()
+                self.targetPoints[i,0] = str_point.split('\t')[0]
+                self.targetPoints[i,1] = str_point.split('\t')[1]
+                
+            self.fP.close()
         
      
-    def createResultImage(self):
-        print('Result')
+    
     def createMorph(self):
-        print('morphing phase')
+        self.inputImage = self.inputImageTemp
+        self.targetImage = self.targetImageTemp
+        self.morphedImage = self.inputImage.copy()
+        self.morphedImage  = cv2.cvtColor(self.morphedImage,cv2.COLOR_BGR2RGB)        
+        self.inputImage  = cv2.cvtColor(self.inputImage,cv2.COLOR_BGR2RGB)   
+        h,w,c = self.inputImage.shape
+        for i in range(0,self.triCount):
+            
+            p1_x = self.inputTriangleMorph[i,0,0]
+            p1_y = self.inputTriangleMorph[i,0,1]
+            p2_x = self.inputTriangleMorph[i,2,0]
+            p2_y = self.inputTriangleMorph[i,2,1]
+            p3_x = self.inputTriangleMorph[i,4,0]
+            p3_y = self.inputTriangleMorph[i,4,1]
+            
+            q1_x = self.targetTriangleMorph[i,0,0]
+            q1_y = self.targetTriangleMorph[i,0,1]
+            q2_x = self.targetTriangleMorph[i,2,0]
+            q2_y = self.targetTriangleMorph[i,2,1]
+            q3_x = self.targetTriangleMorph[i,4,0]
+            q3_y = self.targetTriangleMorph[i,4,1]
+            
+            tri1= np.float32([[[p1_x,p1_y],[p2_x,p2_y],[p3_x,p3_y]]])
+            tri2= np.float32([[[q1_x,q1_y],[q2_x,q2_y],[q3_x,q3_y]]])
+            
+            r1 = cv2.boundingRect(tri1)
+            r2 = cv2.boundingRect(tri2)
+    
+            tri1Cropped = []
+            tri2Cropped = []
+             
+            for i in range(0, 3):
+              tri1Cropped.append(((tri1[0][i][0] - r1[0]),(tri1[0][i][1] - r1[1])))
+              tri2Cropped.append(((tri2[0][i][0] - r2[0]),(tri2[0][i][1] - r2[1])))
+            
+            
+            
+            img1Cropped = self.inputImage[r1[1]:r1[1] + r1[3], r1[0]:r1[0] + r1[2]]
+            warpMat = cv2.getAffineTransform( np.float32(tri1Cropped), np.float32(tri2Cropped) )
+            img2Cropped = cv2.warpAffine( img1Cropped, warpMat, (r2[2], r2[3]), None, flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101 )
+            
+            print(tri1)
+            print(tri2)
+            print('***')
+            
+            # Get mask by filling triangle
+            mask = np.zeros((r2[3], r2[2], 3), dtype = np.float32)
+            cv2.fillConvexPoly(mask, np.int32(tri2Cropped), (1.0, 1.0, 1.0), 16, 0);
+             
+            # Apply mask to cropped region
+            img2Cropped = img2Cropped * mask
+            
+            self.morphedImage[r2[1]:r2[1]+r2[3], r2[0]:r2[0]+r2[2]] = self.morphedImage[r2[1]:r2[1]+r2[3], r2[0]:r2[0]+r2[2]] * ( (1.0, 1.0, 1.0) - mask )
+     
+            self.morphedImage[r2[1]:r2[1]+r2[3], r2[0]:r2[0]+r2[2]] = self.morphedImage[r2[1]:r2[1]+r2[3], r2[0]:r2[0]+r2[2]] + img2Cropped
+            cv2.imshow('a', self.morphedImage)
+            cv2.waitKey(0)
+            
+#            
+#            RectImage = []
+#            img2Cropped = np.zeros((r2[3],r2[2],3))
+#            
+#            for k in range(0,r1[2]):
+#                for m in range(0,r1[3]):
+#                    RectImage.append([k,m,1,0,0,0])
+#                    RectImage.append([0,0,0,k,m,1])
+#            RectIm = np.asarray(RectImage)
+#            resArray = np.matmul(RectIm,self.affine_parameters[i])
+#            
+#             
+#            
+#            
+#            
+#            for k in range(0,r1[2]):
+#                for m in range(0,r1[3]):
+#                    
+#                    if resArray[((k*r1[3]) + (m*2))]< 0 or resArray[((k*r1[3]) + (m*2))]>=r2[3] or resArray[((k*r1[3]) + (m*2)) + 1 ] < 0 or resArray[((k*r1[3]) + (m*2)) +  1] >= r2[2]:
+#                        
+#                        continue
+#                    else:
+#                        print(int(resArray[((k*r1[3]) + (m*2))]))
+#                        print(int(resArray[((k*r1[3]) + (m*2)) +1 ]))
+#                        print(RectIm[((k*r1[3]) + (m*2)),0])
+#                        print(RectIm[((k*r1[3]) + (m*2)),1])
+#                        img2Cropped[int(resArray[((k*r1[3]) + (m*2))]), int(resArray[((k*r1[3]) + (m*2)) +1 ]) ]= img1Cropped[RectIm[((k*r1[3]) + (m*2)),0],RectIm[((k*r1[3]) + (m*2))],1]
+#            
+#                print('**')
+#            cv2.imshow('S', img2Cropped)
+#            cv2.waitKey(0)
+#          
+#            # Get mask by filling triangle
+#            mask = np.zeros((r2[3], r2[2], 3), dtype = np.float32)
+#            cv2.fillConvexPoly(mask, np.int32(tri2Cropped), (1.0, 1.0, 1.0), 16, 0);
+#            
+#            # Apply mask to cropped region
+#            img2Cropped = img2Cropped * mask
+#                        
+#            self.morphedImage[r2[1]:r2[1]+r2[3], r2[0]:r2[0]+r2[2]] = self.morphedImage[r2[1]:r2[1]+r2[3], r2[0]:r2[0]+r2[2]] *((1.0, 1.0, 1.0) - mask)
+#            self.morphedImage[r2[1]:r2[1]+r2[3], r2[0]:r2[0]+r2[2]] = self.morphedImage[r2[1]:r2[1]+r2[3], r2[0]:r2[0]+r2[2]] + img2Cropped
+#     
+#            
+#        cv2.imwrite('sonuc.jpg',self.morphedImage)
+        
+        
     def draw_point(self,img, p, color ) :
         cv2.circle( img, p, 2, color, cv2.FILLED, cv2.LINE_AA, 0 )
     def rect_contains(self,rect, point) :
@@ -251,7 +396,7 @@ class Window(QMainWindow):
                 ifacet_arr.append(f)
              
             ifacet = np.array(ifacet_arr, np.int)
-            print(ifacet)
+            #print(ifacet)
             color = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
      
             cv2.fillConvexPoly(img, ifacet, color, cv2.LINE_AA, 0);
@@ -260,34 +405,39 @@ class Window(QMainWindow):
             cv2.circle(img, (centers[i][0], centers[i][1]), 3, (0, 0, 0), cv2.FILLED, cv2.LINE_AA, 0)
      
     
-    def draw_delaunay(self,img, subdiv, delaunay_color,tr_list):
+    def draw_delaunay(self,img, subdiv, delaunay_color):
      
         triangleList = subdiv.getTriangleList();
         
         #print(triangleList)
         size = img.shape
         r = (0, 0, size[1], size[0])
-
+        point_list = []
         for t in triangleList :
-             
+            
             pt1 = (t[0], t[1])
             pt2 = (t[2], t[3])
             pt3 = (t[4], t[5])
              
             
             if self.rect_contains(r, pt1) and self.rect_contains(r, pt2) and self.rect_contains(r, pt3) :
+                
+                individual_triangle =  [[int(t[0]),int(t[1]),1,0,0,0],[0,0,0,int(t[0]),int(t[1]),1],[int(t[2]),int(t[3]),1,0,0,0],[0,0,0,int(t[2]),int(t[3]),1],[int(t[4]),int(t[5]),1,0,0,0],[0,0,0,int(t[4]),int(t[5]),1]]
+                point_list.append(individual_triangle)
                 cv2.line(img, pt1, pt2, delaunay_color, 1, cv2.LINE_AA, 0)
                 cv2.line(img, pt2, pt3, delaunay_color, 1, cv2.LINE_AA, 0)
                 cv2.line(img, pt3, pt1, delaunay_color, 1, cv2.LINE_AA, 0)
 
-        return triangleList                
+        return point_list           
     def createTriangulation(self):
         if(self.targetFile == '' or self.inputFile == ''):
             return
+        
         self.inputImage = cv2.cvtColor(self.inputImage,cv2.COLOR_BGR2RGB)
         self.targetImage = cv2.cvtColor(self.targetImage,cv2.COLOR_BGR2RGB)
         
-        delaunay_color = (255,255,255)
+        self.inputPoints = self.sortPoints(self.inputPoints)
+        self.targetPoints = self.sortPoints(self.targetPoints)
         
         input_size = self.inputImage.shape
         input_size_target = self.targetImage.shape
@@ -300,6 +450,7 @@ class Window(QMainWindow):
         
         subdiv = cv2.Subdiv2D(rect)
         subdiv_target = cv2.Subdiv2D(rect_target)
+        
         points= []
         points_target = []
         
@@ -310,25 +461,26 @@ class Window(QMainWindow):
         for p in points:
             subdiv.insert(p)
             img_copy = img_org.copy()
-            self.draw_delaunay(img_copy,subdiv,(255,255,255),self.inputTriangle)
+            
+            self.draw_delaunay(img_copy,subdiv,(255,255,255))
+            
             cv2.imshow('deneme', img_copy)
             cv2.waitKey(100)
         
         for p in points_target:
             subdiv_target.insert(p)
             img_copy_target = img_org_target.copy()
-            self.draw_delaunay(img_copy_target,subdiv_target,(255,255,255),self.targetTriangle)
+            
+            self.draw_delaunay(img_copy_target,subdiv_target,(255,255,255))
+            
             cv2.imshow('deneme_target', img_copy_target)
             cv2.waitKey(100)
         
+        self.inputTrianglePoints = self.draw_delaunay(self.inputImage,subdiv,(255,255,255))
+        self.targetTrianglePoints = self.draw_delaunay(self.targetImage,subdiv_target,(255,255,255))
+                
         
         
-        
-        tri_list_input = self.draw_delaunay(self.inputImage,subdiv,(255,255,255),self.inputTriangle)
-        tri_list_target = self.draw_delaunay(self.targetImage,subdiv_target,(255,255,255),self.targetTriangle)
-        
-        
-        print(tri_list_input)
         
         for p in points:
             self.draw_point(self.inputImage,p,(0,0,255))
@@ -349,14 +501,210 @@ class Window(QMainWindow):
         cv2.imwrite('delauneyTarget.jpg', self.targetImage)
         
         cv2.destroyAllWindows()
-        self.content = ExampleContent(self, 'delauneyInput.jpg','delauneyTarget.jpg')
+        
+   
+        self.triCount = 0
+        
+        for p in self.targetTrianglePoints:
+            self.triCount+=1
+        
+        self.inputTriangleMorph = np.asarray(self.inputTrianglePoints[:][:][:])
+        self.targetTriangleMorph = np.asarray(self.targetTrianglePoints[:][:][:]) 
+        x,y,z = self.inputTriangleMorph.shape
+        for i in range(x):
+            p1_x = self.inputTriangleMorph[i][0][0]
+            p1_y = self.inputTriangleMorph[i][0][1]
+            p2_x = self.inputTriangleMorph[i][2][0]
+            p2_y = self.inputTriangleMorph[i][2][1]
+            p3_x = self.inputTriangleMorph[i][4][0]
+            p3_y = self.inputTriangleMorph[i][4][1]
+            
+            if p1_x > p3_x and p2_x > p3_x:
+                self.inputTriangleMorph[i][0][0] = p3_x
+                self.inputTriangleMorph[i][0][1] = p3_y
+                self.inputTriangleMorph[i][1][3] = p3_x
+                self.inputTriangleMorph[i][1][4] = p3_y
+                if p1_x > p2_x:
+                    self.inputTriangleMorph[i][2][0] = p2_x
+                    self.inputTriangleMorph[i][2][1] = p2_y
+                    self.inputTriangleMorph[i][3][3] = p2_x
+                    self.inputTriangleMorph[i][3][4] = p2_y
+                    
+                    self.inputTriangleMorph[i][4][0] = p1_x
+                    self.inputTriangleMorph[i][4][1] = p1_y
+                    self.inputTriangleMorph[i][5][3] = p1_x
+                    self.inputTriangleMorph[i][5][4] = p1_y
+                else:
+                    self.inputTriangleMorph[i][2][0] = p1_x
+                    self.inputTriangleMorph[i][2][1] = p1_y
+                    self.inputTriangleMorph[i][3][3] = p1_x
+                    self.inputTriangleMorph[i][3][4] = p1_y
+                
+                    self.inputTriangleMorph[i][4][0] = p2_x
+                    self.inputTriangleMorph[i][4][1] = p2_y
+                    self.inputTriangleMorph[i][5][3] = p2_x
+                    self.inputTriangleMorph[i][5][4] = p2_y
+            
+            elif p1_x > p2_x and p2_x < p3_x:
+                self.inputTriangleMorph[i][0][0] = p2_x
+                self.inputTriangleMorph[i][0][1] = p2_y
+                self.inputTriangleMorph[i][1][3] = p2_x
+                self.inputTriangleMorph[i][1][4] = p2_y
+                if p1_x > p3_x:
+                    self.inputTriangleMorph[i][2][0] = p3_x
+                    self.inputTriangleMorph[i][2][1] = p3_y
+                    self.inputTriangleMorph[i][3][3] = p3_x
+                    self.inputTriangleMorph[i][3][4] = p3_y
+                    
+                    self.inputTriangleMorph[i][4][0] = p1_x
+                    self.inputTriangleMorph[i][4][1] = p1_y
+                    self.inputTriangleMorph[i][5][3] = p1_x
+                    self.inputTriangleMorph[i][5][4] = p1_y
+                else:
+                    self.inputTriangleMorph[i][2][0] = p1_x
+                    self.inputTriangleMorph[i][2][1] = p1_y
+                    self.inputTriangleMorph[i][3][3] = p1_x
+                    self.inputTriangleMorph[i][3][4] = p1_y
+                
+                    self.inputTriangleMorph[i][4][0] = p3_x
+                    self.inputTriangleMorph[i][4][1] = p3_y
+                    self.inputTriangleMorph[i][5][3] = p3_x
+                    self.inputTriangleMorph[i][5][4] = p3_y
+            
+            elif p1_x < p3_x and p1_x < p3_x:
+                self.inputTriangleMorph[i][0][0] = p1_x
+                self.inputTriangleMorph[i][0][1] = p1_y
+                self.inputTriangleMorph[i][1][3] = p1_x
+                self.inputTriangleMorph[i][1][4] = p1_y
+                if p3_x > p2_x:
+                    self.inputTriangleMorph[i][2][0] = p2_x
+                    self.inputTriangleMorph[i][2][1] = p2_y
+                    self.inputTriangleMorph[i][3][3] = p2_x
+                    self.inputTriangleMorph[i][3][4] = p2_y
+                    
+                    self.inputTriangleMorph[i][4][0] = p3_x
+                    self.inputTriangleMorph[i][4][1] = p3_y
+                    self.inputTriangleMorph[i][5][3] = p3_x
+                    self.inputTriangleMorph[i][5][4] = p3_y
+                else:
+                    self.inputTriangleMorph[i][2][0] = p3_x
+                    self.inputTriangleMorph[i][2][1] = p3_y
+                    self.inputTriangleMorph[i][3][3] = p3_x
+                    self.inputTriangleMorph[i][3][4] = p3_y
+                
+                    self.inputTriangleMorph[i][4][0] = p2_x
+                    self.inputTriangleMorph[i][4][1] = p2_y
+                    self.inputTriangleMorph[i][5][3] = p2_x
+                    self.inputTriangleMorph[i][5][4] = p2_y
+
+        x,y,z = self.targetTriangleMorph.shape
+        for i in range(x):
+            p1_x = self.targetTriangleMorph[i][0][0]
+            p1_y = self.targetTriangleMorph[i][0][1]
+            p2_x = self.targetTriangleMorph[i][2][0]
+            p2_y = self.targetTriangleMorph[i][2][1]
+            p3_x = self.targetTriangleMorph[i][4][0]
+            p3_y = self.targetTriangleMorph[i][4][1]
+            
+            if p1_x > p3_x and p2_x > p3_x:
+                self.targetTriangleMorph[i][0][0] = p3_x
+                self.targetTriangleMorph[i][0][1] = p3_y
+                self.targetTriangleMorph[i][1][3] = p3_x
+                self.targetTriangleMorph[i][1][4] = p3_y
+                if p1_x > p2_x:
+                    self.targetTriangleMorph[i][2][0] = p2_x
+                    self.targetTriangleMorph[i][2][1] = p2_y
+                    self.targetTriangleMorph[i][3][3] = p2_x
+                    self.targetTriangleMorph[i][3][4] = p2_y
+                    
+                    self.targetTriangleMorph[i][4][0] = p1_x
+                    self.targetTriangleMorph[i][4][1] = p1_y
+                    self.targetTriangleMorph[i][5][3] = p1_x
+                    self.targetTriangleMorph[i][5][4] = p1_y
+                else:
+                    self.targetTriangleMorph[i][2][0] = p1_x
+                    self.targetTriangleMorph[i][2][1] = p1_y
+                    self.targetTriangleMorph[i][3][3] = p1_x
+                    self.targetTriangleMorph[i][3][4] = p1_y
+                
+                    self.targetTriangleMorph[i][4][0] = p2_x
+                    self.targetTriangleMorph[i][4][1] = p2_y
+                    self.targetTriangleMorph[i][5][3] = p2_x
+                    self.targetTriangleMorph[i][5][4] = p2_y
+            
+            elif p1_x > p2_x and p2_x < p3_x:
+                self.targetTriangleMorph[i][0][0] = p2_x
+                self.targetTriangleMorph[i][0][1] = p2_y
+                self.targetTriangleMorph[i][1][3] = p2_x
+                self.targetTriangleMorph[i][1][4] = p2_y
+                if p1_x > p3_x:
+                    self.targetTriangleMorph[i][2][0] = p3_x
+                    self.targetTriangleMorph[i][2][1] = p3_y
+                    self.targetTriangleMorph[i][3][3] = p3_x
+                    self.targetTriangleMorph[i][3][4] = p3_y
+                    
+                    self.targetTriangleMorph[i][4][0] = p1_x
+                    self.targetTriangleMorph[i][4][1] = p1_y
+                    self.targetTriangleMorph[i][5][3] = p1_x
+                    self.targetTriangleMorph[i][5][4] = p1_y
+                else:
+                    self.targetTriangleMorph[i][2][0] = p1_x
+                    self.targetTriangleMorph[i][2][1] = p1_y
+                    self.targetTriangleMorph[i][3][3] = p1_x
+                    self.targetTriangleMorph[i][3][4] = p1_y
+                
+                    self.targetTriangleMorph[i][4][0] = p3_x
+                    self.targetTriangleMorph[i][4][1] = p3_y
+                    self.targetTriangleMorph[i][5][3] = p3_x
+                    self.targetTriangleMorph[i][5][4] = p3_y
+            
+            elif p1_x < p3_x and p1_x < p3_x:
+                self.targetTriangleMorph[i][0][0] = p1_x
+                self.targetTriangleMorph[i][0][1] = p1_y
+                self.targetTriangleMorph[i][1][3] = p1_x
+                self.targetTriangleMorph[i][1][4] = p1_y
+                if p3_x > p2_x:
+                    self.targetTriangleMorph[i][2][0] = p2_x
+                    self.targetTriangleMorph[i][2][1] = p2_y
+                    self.targetTriangleMorph[i][3][3] = p2_x
+                    self.targetTriangleMorph[i][3][4] = p2_y
+                    
+                    self.targetTriangleMorph[i][4][0] = p3_x
+                    self.targetTriangleMorph[i][4][1] = p3_y
+                    self.targetTriangleMorph[i][5][3] = p3_x
+                    self.targetTriangleMorph[i][5][4] = p3_y
+                else:
+                    self.targetTriangleMorph[i][2][0] = p3_x
+                    self.targetTriangleMorph[i][2][1] = p3_y
+                    self.targetTriangleMorph[i][3][3] = p3_x
+                    self.targetTriangleMorph[i][3][4] = p3_y
+                
+                    self.targetTriangleMorph[i][4][0] = p2_x
+                    self.targetTriangleMorph[i][4][1] = p2_y
+                    self.targetTriangleMorph[i][5][3] = p2_x
+                    self.targetTriangleMorph[i][5][4] = p2_y
+
+        
+        
+        self.content = ExampleContent(self, 'delauneyInput.jpg','delauneyTarget.jpg','delauneyInput.jpg')
         self.setCentralWidget(self.content)
         
-        
+        aff_parameters =  self.calculateAffine(self.triCount)
+        self.affine_parameters = np.asarray(aff_parameters[:][:][:])
+        for af in self.affine_parameters:
+            print(af)
+   
         #tri = Delaunay(points)
         #print(tri.simplices)
-        
-    
+            
+                
+    def calculateAffine(self,count):
+        res = []
+        for i in range(count):
+            target_coord = np.asarray( [ self.targetTrianglePoints[i][0][0],self.targetTrianglePoints[i][0][1],self.targetTrianglePoints[i][2][0],self.targetTrianglePoints[i][2][1],self.targetTrianglePoints[i][4][0], self.targetTrianglePoints[i][4][1]]).reshape(-1,1)
+            input_coord = np.asarray(self.inputTrianglePoints[i])
+            res.append(np.matmul(np.linalg.inv(input_coord),target_coord))
+        return res
     
 if __name__ == '__main__':
     App = QApplication(sys.argv)
